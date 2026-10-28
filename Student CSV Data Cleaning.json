@@ -1,0 +1,264 @@
+{
+  "name": "Student CSV Data Cleaning",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_DRIVE_FILE_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [-560, -32],
+      "id": "256a99b9-18da-4156-b1f1-5bf2bb529b6f",
+      "name": "Download student data",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1GL3Yn8vyA8LEJbk",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [-352, -32],
+      "id": "51f62ee2-52b7-4e82-96bb-495dea4c770b",
+      "name": "Extract Student Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\nconst seenStudentIds = new Set();\nconst seenNames = new Set();\n\nconst results = [];\n\n// Get today's date in India (YYYY-MM-DD).\nfunction getTodayIST() {\n  const parts = new Intl.DateTimeFormat('en-GB', {\n    timeZone: 'Asia/Kolkata',\n    year: 'numeric',\n    month: '2-digit',\n    day: '2-digit',\n  }).formatToParts(new Date());\n\n  const values = {};\n\n  for (const part of parts) {\n    if (part.type !== 'literal') {\n      values[part.type] = part.value;\n    }\n  }\n\n  return `${values.year}-${values.month}-${values.day}`;\n}\n\nconst todayIST = getTodayIST();\n\n// Convert null, undefined, and other values to trimmed text.\nfunction text(value) {\n  return value === null || value === undefined\n    ? ''\n    : String(value).trim();\n}\n\n// Convert names and text fields to proper case.\n// Examples: MANOJ K -> Manoj K, chennai -> Chennai.\nfunction properCase(value) {\n  return text(value)\n    .toLowerCase()\n    .replace(/(^|[\\s'-])([a-z])/g, (_, separator, letter) =>\n      separator + letter.toUpperCase()\n    );\n}\n\n// Validate a real date and normalize it to YYYY-MM-DD.\n// Accepted input formats: DD-MM-YYYY and YYYY-MM-DD.\nfunction normalizeDate(value) {\n  const date = text(value);\n\n  let year;\n  let month;\n  let day;\n\n  let match = date.match(/^(\\d{2})-(\\d{2})-(\\d{4})$/);\n\n  if (match) {\n    [, day, month, year] = match;\n  } else {\n    match = date.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);\n\n    if (!match) {\n      return '';\n    }\n\n    [, year, month, day] = match;\n  }\n\n  const y = Number(year);\n  const m = Number(month);\n  const d = Number(day);\n\n  // Reject impossible calendar dates.\n  const parsed = new Date(Date.UTC(y, m - 1, d));\n\n  if (\n    parsed.getUTCFullYear() !== y ||\n    parsed.getUTCMonth() !== m - 1 ||\n    parsed.getUTCDate() !== d\n  ) {\n    return '';\n  }\n\n  // Always return YYYY-MM-DD.\n  return `${year}-${month}-${day}`;\n}\n\nfor (const item of items) {\n  const row = { ...item.json };\n\n  // Skip completely empty rows.\n  if (Object.values(row).every(value => text(value) === '')) {\n    continue;\n  }\n\n  const errors = [];\n\n  // Clean and normalize values.\n  row.Student_ID = text(row.Student_ID);\n  row.Name = properCase(row.Name);\n  row.Email = text(row.Email).toLowerCase();\n  row.Phone = text(row.Phone);\n  row.Course = properCase(row.Course);\n  row.City = properCase(row.City);\n  row.Fee_Paid = text(row.Fee_Paid).toUpperCase();\n\n  const originalDate = text(row.Enrolled_Date);\n  const normalizedDate = normalizeDate(originalDate);\n\n  // 1. Student ID: required and unique.\n  const studentIdKey = row.Student_ID.toUpperCase();\n\n  if (!row.Student_ID) {\n    errors.push('Student ID is missing');\n  } else if (seenStudentIds.has(studentIdKey)) {\n    errors.push('Duplicate Student ID');\n  } else {\n    seenStudentIds.add(studentIdKey);\n  }\n\n  // 2. Student name: required and unique by the agreed rule.\n  const nameKey = row.Name.toLowerCase().replace(/\\s+/g, ' ');\n\n  if (!row.Name) {\n    errors.push('Student name is missing');\n  } else if (seenNames.has(nameKey)) {\n    errors.push('Duplicate student name');\n  } else {\n    seenNames.add(nameKey);\n  }\n\n  // 3. Email: required; duplicate email addresses are allowed.\n  if (!row.Email) {\n    errors.push('Email is missing');\n  } else if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(row.Email)) {\n    errors.push(\n      'Invalid email format; enter a valid email address'\n    );\n  }\n\n  // 4. Phone: required and exactly 10 digits.\n  // Duplicate phone numbers are allowed.\n  if (!row.Phone) {\n    errors.push('Phone number is missing');\n  } else if (!/^\\d{10}$/.test(row.Phone)) {\n    errors.push(\n      'Invalid phone number; enter exactly 10 digits'\n    );\n  }\n\n  // 5. Course: required.\n  if (!row.Course) {\n    errors.push('Course is missing; select a course');\n  }\n\n  // 6. Fee status: YES and NO are both valid.\n  if (!row.Fee_Paid) {\n    errors.push(\n      'Fee payment status is missing; enter YES or NO'\n    );\n  } else if (!['YES', 'NO'].includes(row.Fee_Paid)) {\n    errors.push('Invalid fee status; enter YES or NO');\n  }\n\n  // 7. City: required.\n  if (!row.City) {\n    errors.push('City is missing');\n  }\n\n  // 8. Enrollment date: required, valid, normalized, and not future.\n  if (!originalDate) {\n    errors.push('Enrollment date is missing');\n  } else if (!normalizedDate) {\n    errors.push(\n      'Invalid enrollment date; use DD-MM-YYYY or YYYY-MM-DD'\n    );\n  } else {\n    // Save the normalized date even if it is in the future.\n    // This allows the invalid CSV to show the standardized date too.\n    row.Enrolled_Date = normalizedDate;\n\n    if (normalizedDate > todayIST) {\n      errors.push('Enrollment date cannot be in the future');\n    }\n  }\n\n  // Final validation result.\n  row.Validation_Status = errors.length === 0 ? 'Valid' : 'Invalid';\n  row.Validation_Errors = errors.join('; ');\n\n  results.push({ json: row });\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-176, -32],
+      "id": "82d988d7-0f1e-4f08-91e4-f87effc95c2d",
+      "name": "Filter Student Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "11be9d19-5ad3-4073-813d-3d69f1d8bee8",
+              "leftValue": "={{ $json.Validation_Status }}",
+              "rightValue": "Valid",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [0, -32],
+      "id": "15671ed4-9f4e-49a4-a414-75da1e87cd08",
+      "name": "Record Separation",
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [224, -144],
+      "id": "7457857f-a352-4761-a19c-60c05afceaed",
+      "name": "Valid Records"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [224, 96],
+      "id": "6a0eeb90-4e88-4f63-b468-495aea4ef40c",
+      "name": "Invalid Records"
+    },
+    {
+      "parameters": {
+        "name": "={{ 'students_clean_valid_Records_' + $now.setZone('Asia/Kolkata').toFormat('yyyy-MM-dd') + '.csv' }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/folders/YOUR_GOOGLE_DRIVE_FOLDER_ID",
+          "mode": "url"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [480, -144],
+      "id": "f8e9f7f6-6f93-491e-9360-aaab87d1e6c7",
+      "name": "Upload Valid Records",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1GL3Yn8vyA8LEJbk",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "={{ 'students_clean_invalid_Records_' + $now.setZone('Asia/Kolkata').toFormat('yyyy-MM-dd') + '.csv' }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/folders/YOUR_GOOGLE_DRIVE_FOLDER_ID",
+          "mode": "url"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [480, 96],
+      "id": "cc16816c-6bca-4258-b519-8e12f8f2541d",
+      "name": "Upload Invalid Records",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1GL3Yn8vyA8LEJbk",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-768, -32],
+      "id": "a6c9d5d6-128d-4455-8f18-87e6ea61ba83",
+      "name": "Start Work Flow"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Download student data": {
+      "main": [
+        [
+          {
+            "node": "Extract Student Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Student Data": {
+      "main": [
+        [
+          {
+            "node": "Filter Student Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Student Data": {
+      "main": [
+        [
+          {
+            "node": "Record Separation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Separation": {
+      "main": [
+        [
+          {
+            "node": "Valid Records",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invalid Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Records": {
+      "main": [
+        [
+          {
+            "node": "Upload Valid Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invalid Records": {
+      "main": [
+        [
+          {
+            "node": "Upload Invalid Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Work Flow": {
+      "main": [
+        [
+          {
+            "node": "Download student data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "65b2b20c-7922-4b12-9e11-9c565819eba8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "08b697ac708a8ffa4f357ab54c87f3c9441e95dd6cf79bf14e1a95bbf248b992"
+  },
+  "nodeGroups": [],
+  "id": "Qx5kGrR3lrryEHtk",
+  "tags": []
+}
