@@ -11,6 +11,7 @@ Organizations often receive CSV files containing missing fields, inconsistent fo
 This workflow automates CSV cleaning and validation using predefined business rules. It standardizes records, identifies validation failures, adds error explanations, and uploads separate valid and invalid CSV files to Google Drive.
 
 **Workflow:** Google Drive → CSV Extraction → JavaScript Cleaning & Validation → Conditional Routing → CSV Generation → Google Drive Upload
+https://github.com/Surya-90/n8n-student-data-validation/blob/main/Screenshots/Screenshot%202026-10-28%20092652.png
 
 ## Key Features
 
